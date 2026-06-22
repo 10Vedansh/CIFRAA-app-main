@@ -1,119 +1,265 @@
-# 50Stacks 🚀  
-### Mutual Fund Analytics & Insights Platform
+# CIFRAA – Comprehensive Intelligent Fund Recommendation & Analysis Assistant
 
-**50Stacks** is a modern, data-driven web platform designed to help users **analyze, compare, and understand Indian mutual funds** with clarity and confidence.
+## Overview
 
-By transforming complex financial data into **clean visuals and actionable insights**, 50Stacks makes mutual fund analysis accessible for learners, investors, and finance enthusiasts alike.
+CIFRAA is an AI-powered mutual fund recommendation and portfolio analysis platform designed to help investors make informed investment decisions. The platform analyzes mutual fund data, evaluates investor profiles, and generates personalized investment recommendations based on risk appetite, financial goals, and investment horizon.
 
----
-
-## ✨ Key Features
-
-- 📊 **Fund Overview** — essential performance metrics at a glance  
-- ⚖️ **Risk & Return Analysis** — understand volatility vs rewards  
-- 🧩 **Sector Allocation Insights** — see where your money is invested  
-- 🔍 **Smart Search & Filters** — find funds by name or AMC  
-- 🎨 **Modern, Responsive UI** — optimized for clarity and usability  
+Unlike traditional fund discovery platforms, CIFRAA combines financial analytics, machine learning, and intelligent recommendation systems to provide actionable investment insights in a simple and user-friendly interface.
 
 ---
 
-## 🛠️ Tech Stack
+# Problem Statement
 
-FUNDEX is built using a modern frontend stack focused on performance and scalability:
+India has thousands of mutual fund schemes across various categories, making it difficult for retail investors to:
 
-- **React** – UI framework  
-- **TypeScript** – Type-safe development  
-- **Vite** – Fast build tool & dev server  
-- **Tailwind CSS** – Utility-first styling  
-- **shadcn/ui** – Reusable UI components  
-- **React Router** – Client-side routing  
-- **Recharts** – Interactive data visualizations  
-- **Supabase** – Backend services (optional / extensible)  
+- Identify suitable funds
+- Understand risk levels
+- Build diversified portfolios
+- Compare funds effectively
+- Align investments with financial goals
 
----
+Most investors either rely on generic rankings or recommendations that are not personalized to their needs.
 
-## ⚙️ Getting Started (Local Setup)
-
-### Prerequisites
-Make sure you have:
-- **Node.js** (v18 or higher)
-- **npm**
-
----
-  
-## Installation
-
-- Clone the repository
-git clone https://github.com/10Vedansh/Fundex-app.git
-
-- Navigate into the project directory
-cd Fundex-app
-
-- Install dependencies
-npm install
-
-- Start the development server
-npm run dev
-
-The application will be available at:
-**http://localhost:8080**
+CIFRAA addresses this challenge through data-driven and personalized mutual fund recommendations.
 
 ---
 
-## 📦 Production Build
+# Key Features
 
-- Create an optimized production build:
+## Fund Discovery
 
-npm run build
+- Search mutual funds across categories
+- View detailed fund information
+- Compare multiple funds
+- Analyze historical performance
 
-- Preview the production build locally:
+## Personalized Recommendations
 
-npm run preview
+- Risk-based recommendations
+- Goal-oriented investment suggestions
+- Time-horizon analysis
+- Portfolio allocation guidance
 
----
+## Portfolio Analysis
 
-## 🌐 Deployment
+- Diversification assessment
+- Risk evaluation
+- Performance tracking
+- Fund overlap analysis
 
-FUNDEX is a frontend-only application and can be deployed easily on:
+## AI-Powered Assistance
 
--**Netlify**
-
--**Vercel**
-
--**GitHub Pages**
-
-Example (Netlify)
--Setting	Value
--Build command	npm run build
--Publish directory	dist
-
----
-
-## 📌 Project Vision
-### FUNDEX is built with extensibility in mind. Planned enhancements include:
-
--🔁 **Advanced fund comparison tools**
-
--⭐ **Watchlists & portfolio tracking**
-
--🎯 **Personalized fund insights**
-
--🔐 **User authentication & profiles**
+- Investment-related queries
+- Fund explanations
+- Financial education support
+- Strategy recommendations
 
 ---
 
-## 👨‍💻 Authors
+# Current Data Infrastructure
 
-## **Dhruv Dalal** | **Vedansh Taparia**
-### Frontend Developer & Data Enthusiast | API Ideation, Data Analysis & Finance Enthusiast
+## Excel-Based Data Management
 
-### Contributions
+The current version of CIFRAA uses structured Excel datasets as the primary data source.
 
--**Dhruv Dalal**: Frontend development, UI/UX, data analysis
+### Dataset Includes
 
--**Vedansh Taparia**: API ideation, data analysis, finance-focused insights
+- Mutual Fund Master Data
+- Fund Categories
+- AMC Information
+- Returns Data
+- Risk Metrics
+- Expense Ratios
+- AUM Data
+- Fund Ratings
+- Historical Performance Metrics
 
+### Data Processing Workflow
 
+```text
+Raw Fund Data
+      │
+      ▼
+Excel Dataset
+      │
+      ▼
+Data Cleaning
+      │
+      ▼
+Feature Engineering
+      │
+      ▼
+Recommendation Engine
+      │
+      ▼
+User Recommendations
+```
 
+The Excel-based architecture allows rapid experimentation, model development, and validation before transitioning to large-scale database systems.
 
+---
 
+# Recommendation Engine
+
+The recommendation engine evaluates:
+
+### Investor Parameters
+
+- Risk Appetite
+- Age Group
+- Investment Experience
+- Investment Horizon
+- Financial Goals
+
+### Fund Parameters
+
+- Historical Returns
+- Volatility
+- Risk Scores
+- Expense Ratio
+- Assets Under Management (AUM)
+- Fund Category
+- Consistency Metrics
+
+### Recommendation Process
+
+```text
+User Questionnaire
+        │
+        ▼
+Profile Creation
+        │
+        ▼
+Risk Assessment
+        │
+        ▼
+Fund Filtering
+        │
+        ▼
+Scoring Algorithm
+        │
+        ▼
+Top Recommendations
+```
+
+---
+
+# Machine Learning Components
+
+CIFRAA incorporates machine learning techniques for:
+
+- Investor profiling
+- Recommendation ranking
+- Portfolio optimization
+- Fund similarity analysis
+- Risk prediction
+
+Models are trained using historical mutual fund performance data and engineered financial features.
+
+---
+
+# Technology Stack
+
+## Frontend
+
+- React.js
+- TypeScript
+- Tailwind CSS
+- Vite
+
+## Backend Logic
+
+- JavaScript / TypeScript
+- Python Data Processing
+- Excel-Based Data Storage
+
+## Data Analytics
+
+- Pandas
+- NumPy
+- Scikit-Learn
+
+## AI Integration
+
+- OpenAI API
+- Natural Language Processing
+
+---
+
+# System Architecture
+
+```text
+                 Mutual Fund Dataset
+                      (Excel)
+                          │
+                          ▼
+                 Data Processing Layer
+                          │
+                          ▼
+                 Feature Engineering
+                          │
+                          ▼
+                 Recommendation Engine
+                          │
+            ┌─────────────┼─────────────┐
+            ▼                           ▼
+     Portfolio Analysis         AI Assistant
+            │                           │
+            └─────────────┬─────────────┘
+                          ▼
+                    User Dashboard
+```
+
+---
+
+# User Workflow
+
+1. User completes investment questionnaire.
+2. CIFRAA evaluates investor profile.
+3. Suitable mutual funds are shortlisted.
+4. Funds are ranked using the recommendation engine.
+5. Portfolio suggestions are generated.
+6. User receives personalized investment recommendations.
+
+---
+
+# Applications
+
+- Retail Investors
+- First-Time Investors
+- Financial Advisors
+- Wealth Management Platforms
+- Investment Education Platforms
+
+---
+
+# Future Enhancements
+
+- Real-time mutual fund updates
+- Automated portfolio rebalancing
+- Advanced risk analytics
+- SIP optimization
+- Tax-aware investment recommendations
+- Broker integration
+- Mobile application
+
+---
+
+# Project Team
+
+## Founder & Developer
+
+Vedansh Taparia
+Dhruv Dalal
+Shivansh Tewari
+
+---
+
+# Project Vision
+
+To make intelligent and personalized mutual fund investing accessible to every investor through AI-driven financial insights and recommendation systems.
+
+---
+
+© CIFRAA – Comprehensive Intelligent Fund Recommendation & Analysis Assistant
+All Rights Reserved.
