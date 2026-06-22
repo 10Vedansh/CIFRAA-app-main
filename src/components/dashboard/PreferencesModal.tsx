@@ -206,22 +206,15 @@ export function PreferencesModal({ isOpen, onClose, onSaved }: PreferencesModalP
             </div>
           ))}
 
-          {/* Score + Profile Display */}
+          {/* Your Investor Profile */}
           {investorProfile && profileInfo && (
-            <div className={cn('rounded-xl border p-4 space-y-3', profileInfo.bg)}>
+            <div className={cn('rounded-xl border p-5 space-y-3', profileInfo.bg)}>
+              <p className="text-sm font-semibold text-foreground/70 uppercase tracking-wider">Your Investor Profile</p>
               <div className="flex items-center justify-between">
-                <span className="text-sm font-medium">Total Score</span>
-                <span className="text-2xl font-bold">{totalScore}</span>
+                <span className={cn('text-2xl font-bold', profileInfo.color)}>{investorProfile}</span>
+                <span className="text-sm font-medium text-muted-foreground">Risk: {profileInfo.riskLevel}</span>
               </div>
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium">Investor Profile</span>
-                <span className={cn('text-lg font-bold', profileInfo.color)}>{investorProfile}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium">Score Range</span>
-                <span className="text-sm text-muted-foreground">{profileInfo.range}</span>
-              </div>
-              <p className="text-xs text-muted-foreground pt-1 border-t border-white/10">{profileInfo.desc}</p>
+              <p className="text-sm text-muted-foreground leading-relaxed">{profileInfo.desc}</p>
             </div>
           )}
 

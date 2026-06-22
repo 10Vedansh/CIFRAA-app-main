@@ -208,6 +208,7 @@ export function recommendFunds(
   const totalScore = computeTotalScore(answers);
   const profile = getProfile(totalScore);
   const categories = PROFILE_MAPPING[profile];
+
   return allocateFunds(funds, profile, categories, answers);
 }
 
