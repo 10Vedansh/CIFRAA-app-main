@@ -27,8 +27,7 @@ export interface UserProfile {
   market_reaction: string | null;
   existing_investments_range: string | null;
   emergency_fund: string | null;
-  investor_profile: string | null;
-  total_score: number | null;
+  risk_slider: number | null;
 }
 
 interface AuthContextType {
@@ -47,6 +46,32 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+export function isProfileComplete(profile: UserProfile | null): boolean {
+  if (!profile) {
+    console.log("PROFILE COMPLETE? false (no profile)");
+    return false;
+  }
+  const result = !!(
+    profile.investor_stage &&
+    profile.primary_goal &&
+    profile.investment_horizon &&
+    profile.market_reaction &&
+    profile.experience_level &&
+    profile.existing_investments_range &&
+    profile.emergency_fund
+  );
+  console.log("PROFILE COMPLETE?", result, {
+    investor_stage: !!profile.investor_stage,
+    primary_goal: !!profile.primary_goal,
+    investment_horizon: !!profile.investment_horizon,
+    market_reaction: !!profile.market_reaction,
+    experience_level: !!profile.experience_level,
+    existing_investments_range: !!profile.existing_investments_range,
+    emergency_fund: !!profile.emergency_fund,
+  });
+  return result;
+}
 
 const PROFILE_KEY = 'cifraa_user_profile';
 const AUTH_KEY = 'cifraa_auth';
@@ -91,8 +116,7 @@ function defaultProfile(userId: string): UserProfile {
     market_reaction: null,
     existing_investments_range: null,
     emergency_fund: null,
-    investor_profile: null,
-    total_score: null,
+    risk_slider: null,
   };
 }
 
@@ -104,6 +128,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const { user: u, profile: p } = loadProfile();
+    console.log("PROFILE LOADED", p);
+    console.log("PROFILE LOADED — fields:", {
+      investor_stage: p?.investor_stage,
+      primary_goal: p?.primary_goal,
+      investment_horizon: p?.investment_horizon,
+      market_reaction: p?.market_reaction,
+      experience_level: p?.experience_level,
+      existing_investments_range: p?.existing_investments_range,
+      emergency_fund: p?.emergency_fund,
+    });
     setUser(u);
     setProfile(p);
     setIsLoading(false);

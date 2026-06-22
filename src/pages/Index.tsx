@@ -1,6 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { recommendFunds, QuestionnaireAnswers, RecommendedFund, InvestorProfile } from '@/utils/newRecommendationEngine';
 import { DashboardHeader } from '@/components/dashboard/DashboardHeader';
 import { DashboardSidebar } from '@/components/dashboard/DashboardSidebar';
 import { DashboardHeaderZone } from '@/components/dashboard/DashboardHeaderZone';
@@ -41,6 +40,11 @@ import { useAuth } from '@/hooks/useAuth';
 import { useFundCache } from '@/hooks/useFundCache';
 import { useWatchlist } from '@/hooks/useWatchlist';
 import { usePortfolio, PortfolioItem } from '@/hooks/usePortfolio';
+import { useNewRecommendations } from '@/hooks/useNewRecommendations';
+import { toRawAnswers } from '@/engine/adapter';
+import { Info } from 'lucide-react';
+import { PreferencesModal } from '@/components/dashboard/PreferencesModal';
+import { isProfileComplete } from '@/hooks/useAuth';
 import {
   Dialog,
   DialogContent,
@@ -88,6 +92,9 @@ const Index = () => {
   // CAMS uploaded flag
   const [hasCamsData, setHasCamsData] = useState(false);
   const [isAddFundOpen, setIsAddFundOpen] = useState(false);
+  const [isPreferencesModalOpen, setIsPreferencesModalOpen] = useState(false);
+
+  const profileComplete = isProfileComplete(profile);
 
   // Redirect if not authenticated
   useEffect(() => {
@@ -114,9 +121,12 @@ const Index = () => {
     return null;
   }, [profile]);
 
-  // Build questionnaire answers from profile
-  const questionnaireAnswers = useMemo((): QuestionnaireAnswers | null => {
-    if (!profile) return null;
+  // Build questionnaire answers from profile using new engine adapter
+  const rawAnswers = useMemo(() => {
+    if (!profile) {
+      console.log("RAW ANSWERS: null (no profile)");
+      return null;
+    }
     const stage = profile.investor_stage;
     const goal = profile.primary_goal;
     const horizon = profile.investment_horizon;
@@ -124,17 +134,48 @@ const Index = () => {
     const experience = profile.experience_level;
     const existing = profile.existing_investments_range;
     const emergency = profile.emergency_fund;
-    if (!stage || !goal || !horizon || !reaction || !experience || !existing || !emergency) return null;
-    return { investorStage: stage, primaryGoal: goal, investmentHorizon: horizon, marketReaction: reaction, experience, existingInvestments: existing, emergencyFund: emergency };
+    const riskSlider = (profile as any).risk_slider;
+    if (!stage || !goal || !horizon || !reaction || !experience || !existing || !emergency) {
+      console.log("RAW ANSWERS: null (missing fields)", { stage, goal, horizon, reaction, experience, existing, emergency });
+      return null;
+    }
+    const result = toRawAnswers(
+      { investorStage: stage, primaryGoal: goal, investmentHorizon: horizon, marketReaction: reaction, experience, existingInvestments: existing, emergencyFund: emergency },
+      riskSlider ?? 5,
+    );
+    console.log("RAW ANSWERS: generated", result);
+    return result;
   }, [profile, prefVersion]);
 
-  // Filter funds using recommendation engine
-  const personalizedFunds = useMemo(() => {
-    if (!questionnaireAnswers || funds.length === 0) return [];
+  // New v2 engine recommendations
+  const { portfolio: newPortfolio, isLoading: newEngineLoading } = useNewRecommendations(rawAnswers);
 
-    const recommended = recommendFunds(funds, questionnaireAnswers);
-    return recommended.length > 0 ? recommended.slice(0, 9) : funds.slice(0, 9).map(f => ({ ...f, matchScore: 0, reason: 'Fallback recommendation', profile: 'Moderate' as InvestorProfile, allocationPercent: 100 / 9 }));
-  }, [funds, questionnaireAnswers]);
+  // Filter funds using recommendation engine (v2 output)
+  const personalizedFunds = useMemo(() => {
+    if (!newPortfolio || funds.length === 0) {
+      console.log("PERSONALIZED FUNDS: empty (newPortfolio:" + !!newPortfolio + ", funds:" + funds.length + ")");
+      return [];
+    }
+
+    const recommended = newPortfolio.recommendedFunds;
+    console.log("RECOMMENDATIONS PASSED TO UI", recommended);
+    if (recommended.length > 0) {
+      // Map v2 RecommendedFund to format used by FundCard (which expects MutualFund)
+      return recommended.map(rec => {
+        const fund = funds.find(f => f.id === rec.fundId);
+        if (!fund) return null;
+        return {
+          ...fund,
+          matchScore: rec.matchScore,
+          reason: rec.reason,
+          profile: newPortfolio.investorPersona.personaName as any,
+          allocationPercent: rec.allocationPercent,
+        };
+      }).filter(Boolean) as any[];
+    }
+    console.log("PERSONALIZED FUNDS: using fallback (0 recommended from engine)");
+    return funds.slice(0, 9).map(f => ({ ...f, matchScore: 0, reason: 'Fallback recommendation', profile: 'Moderate' as any, allocationPercent: 100 / 9 }));
+  }, [funds, newPortfolio]);
 
   // Global search results
   const globalFilteredFunds = useMemo(() => {
@@ -297,10 +338,58 @@ const Index = () => {
               {/* Overview Tab */}
               {activeTab === 'overview' && (
                 <div className="animate-fade-in space-y-6">
-                  {isLoading ? (
+                  {(() => { if (!isLoading && !newEngineLoading) { if (personalizedFunds.length > 0 && newPortfolio) { console.log("SHOW RECOMMENDATIONS — personalizedFunds:", personalizedFunds.length); } else { console.log("SHOW QUESTIONNAIRE — personalizedFunds:", personalizedFunds.length, "newPortfolio:", !!newPortfolio, "profileComplete:", profileComplete); } } })()}
+                  {isLoading || newEngineLoading ? (
                     <DashboardLoadingState />
-                  ) : personalizedFunds.length > 0 ? (
+                  ) : personalizedFunds.length > 0 && newPortfolio ? (
                     <div className="space-y-4">
+                      {/* Persona + Allocation Summary */}
+                      <Card className="glass-card border-primary/20">
+                        <CardContent className="p-5 space-y-3">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <p className="text-sm font-semibold text-foreground/70 uppercase tracking-wider">Your Investor Profile</p>
+                              <p className="text-xl font-bold text-primary mt-1">{newPortfolio.investorPersona.personaName}</p>
+                              <p className="text-sm text-muted-foreground mt-1">{newPortfolio.investorPersona.description}</p>
+                            </div>
+                            <div className="text-right">
+                              <p className="text-sm font-semibold text-foreground/70 uppercase tracking-wider">Allocation</p>
+                              <div className="flex flex-wrap gap-1 mt-1 justify-end max-w-[200px]">
+                                {newPortfolio.allocationPlan.slots.map(slot => (
+                                  <Badge key={slot.canonicalCategory} variant="outline" className="text-xs">
+                                    {slot.percent}% {slot.canonicalCategory.replace(/_/g, ' ')}
+                                  </Badge>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Conflict warnings */}
+                          {newPortfolio.explanations.conflictWarnings.length > 0 && (
+                            <div className="flex items-start gap-2 p-2 rounded bg-warning/10 border border-warning/20 text-xs text-warning">
+                              <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                              <div>
+                                {newPortfolio.explanations.conflictWarnings.map((w, i) => (
+                                  <p key={i}>{w}</p>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Data quality warnings */}
+                          {newPortfolio.explanations.dataQualityWarnings.length > 0 && (
+                            <div className="flex items-start gap-2 p-2 rounded bg-muted text-xs text-muted-foreground">
+                              <Info className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                              <div>
+                                {newPortfolio.explanations.dataQualityWarnings.map((w, i) => (
+                                  <p key={i}>{w}</p>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </CardContent>
+                      </Card>
+
                       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                         {personalizedFunds.map(fund => (
                           <FundCard 
@@ -320,7 +409,7 @@ const Index = () => {
                         <p className="text-muted-foreground mb-4">
                           Complete your investment profile to get personalized fund recommendations.
                         </p>
-                        <Button onClick={() => navigate('/onboarding')}>
+                        <Button onClick={() => setIsPreferencesModalOpen(true)}>
                           Take the Questionnaire
                         </Button>
                       </CardContent>
@@ -666,6 +755,16 @@ const Index = () => {
         funds={funds}
         onAdd={async (fund, details) => {
           await addToPortfolio(fund, details);
+        }}
+      />
+
+      {/* Preferences / Questionnaire Modal */}
+      <PreferencesModal
+        isOpen={isPreferencesModalOpen}
+        onClose={() => setIsPreferencesModalOpen(false)}
+        onSaved={() => {
+          setPrefVersion(v => v + 1);
+          setIsPreferencesModalOpen(false);
         }}
       />
     </div>

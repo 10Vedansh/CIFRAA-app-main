@@ -89,7 +89,7 @@ export default function Auth() {
         return;
       }
       toast.success('Account created! Complete your profile...');
-      navigate('/onboarding');
+      navigate('/dashboard');
     } catch { toast.error('An unexpected error occurred'); }
     finally { setIsLoading(false); }
   };
