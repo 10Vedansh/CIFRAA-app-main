@@ -3,6 +3,18 @@ import { useAuth } from './useAuth';
 import { MutualFund } from '@/types/mutualFund';
 import { toast } from 'sonner';
 
+// Replicate HoldingData type inline to avoid circular dependency
+interface CamsHoldingData {
+  fund_name: string;
+  amc: string;
+  folio_number?: string;
+  units?: number | null;
+  nav?: number | null;
+  current_value?: number | null;
+  cost_value?: number | null;
+  category?: string;
+}
+
 export interface PortfolioItem {
   id: string;
   fund_id: string;
@@ -120,6 +132,27 @@ export function usePortfolio() {
     return true;
   };
 
+  const bulkAddCamsHoldings = async (holdings: CamsHoldingData[]) => {
+    if (!user) return false;
+    const items: PortfolioItem[] = holdings.map(h => ({
+      id: `cams_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      fund_id: `cams_${h.folio_number || h.fund_name.replace(/\s+/g, '_')}`,
+      fund_name: h.fund_name,
+      fund_category: h.category || null,
+      invested_amount: h.cost_value || h.current_value || null,
+      sip_amount: null,
+      is_sip: false,
+      units: h.units || null,
+      purchase_nav: h.nav || null,
+      notes: 'Imported from CAMS statement',
+      created_at: new Date().toISOString(),
+    }));
+    const updated = [...items, ...portfolio];
+    savePortfolio(user.id, updated);
+    setPortfolio(updated);
+    return true;
+  };
+
   const isInPortfolio = (fundId: string) => {
     return portfolio.some((item) => item.fund_id === fundId);
   };
@@ -144,5 +177,6 @@ export function usePortfolio() {
     isInPortfolio,
     refreshPortfolio: fetchPortfolio,
     portfolioSummary,
+    bulkAddCamsHoldings,
   };
 }

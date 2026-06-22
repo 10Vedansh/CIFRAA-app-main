@@ -61,7 +61,10 @@ async function extractTextFromPDF(file: File, password?: string): Promise<string
     loadingParams.password = password;
   }
   
+  console.log("PDF DECRYPTION: loading document...", { passwordProvided: !!password });
   const pdf = await pdfjsLib.getDocument(loadingParams).promise;
+  console.log("PDF DECRYPTED SUCCESSFULLY? Y. Pages:", pdf.numPages);
+  
   const pages: string[] = [];
 
   for (let i = 1; i <= Math.min(pdf.numPages, 30); i++) {
@@ -78,79 +81,566 @@ async function extractTextFromPDF(file: File, password?: string): Promise<string
 
 interface CAMSUploadProps {
   compact?: boolean;
-  onDataLoaded?: () => void;
+  onDataLoaded?: (portfolio?: ParsedPortfolio) => void;
 }
 
+
+const AMC_MAP: Record<string, string> = {
+  'axis': 'Axis', 'hdfc': 'HDFC', 'sbi': 'SBI', 'icici': 'ICICI Prudential',
+  'nippon': 'Nippon India', 'kotak': 'Kotak Mahindra', 'uti': 'UTI',
+  ' mirae': 'Mirae Asset', 'aditya birla': 'Aditya Birla Sun Life',
+  'dsp': 'DSP', 'tata': 'Tata', 'quant': 'Quant', 'ppfas': 'PPFAS',
+  'canara': 'Canara Robeco', 'motilal': 'Motilal Oswal', 'franklin': 'Franklin Templeton',
+  'baroda': 'Baroda BNP Paribas', 'invesco': 'Invesco', 'edelweiss': 'Edelweiss',
+  'sundaram': 'Sundaram', 'bandhan': 'Bandhan', 'white oak': 'White Oak Capital',
+  'old bridge': 'Old Bridge', 'navi': 'Navi', 'groww': 'Groww',
+};
+
+function detectAmc(fundName: string): string {
+  const lower = fundName.toLowerCase();
+  for (const [key, val] of Object.entries(AMC_MAP)) {
+    if (lower.includes(key)) return val;
+  }
+  return '';
+}
+
+/**
+ * Parse modern CAMS/KFintech field-value format.
+ * Looks for patterns like:
+ *   Scheme Name: SBI Bluechip Fund - Direct Plan - Growth
+ *   Unit Balance: 1000.000
+ *   NAV: 50.00
+ *   Current Value: 50000.00
+ */
+function parseFieldValueFormat(lines: string[]): ParsedPortfolio | null {
+  const holdings: HoldingData[] = [];
+  let currentFund: Partial<HoldingData> = {};
+  let investorName = '';
+
+  for (const line of lines) {
+    // Detect investor name
+    if (!investorName && line.match(/investor/i)) {
+      const parts = line.split(/[:–-]/);
+      if (parts.length > 1) investorName = parts[1].trim();
+    }
+
+    // Detect fund/scheme name
+    const schemeMatch = line.match(/(?:Scheme\s*(?:Name)?|Scheme)\s*[:–-]\s*(.+)/i);
+    const folioMatch = line.match(/(?:Folio|Folio\s*Number)\s*[:–-]\s*(\S+)/i);
+    const isFundLine = schemeMatch || line.match(/[A-Z][a-zA-Z\s\-&,()]+(?:\s*-\s*(?:Direct|Regular)\s*Plan)/i);
+
+    if (isFundLine && !schemeMatch && !line.match(/folio|unit|nav|value|cost|amount|balance|investor|date|page|email|phone|address|statement|account/i)) {
+      const potentialName = line.replace(/^\d+\s+/, '').trim();
+      if (potentialName.length > 10 && potentialName.match(/[A-Z][a-z]/) && !potentialName.match(/^\d/)) {
+        if (currentFund.fund_name) holdings.push(currentFund as HoldingData);
+        currentFund = { fund_name: potentialName, amc: detectAmc(potentialName) };
+        continue;
+      }
+    }
+
+    if (schemeMatch) {
+      if (currentFund.fund_name) holdings.push(currentFund as HoldingData);
+      currentFund = { fund_name: schemeMatch[1].trim(), amc: detectAmc(schemeMatch[1]) };
+      continue;
+    }
+
+    if (folioMatch) {
+      if (!currentFund.folio_number) {
+        currentFund.folio_number = folioMatch[1].trim();
+      }
+    }
+
+    if (currentFund.fund_name) {
+      const unitMatch = line.match(/(?:Unit\s*Balance|Units|Units?)\s*[:–-]\s*([\d,]+\.?\d*)/i);
+      const navMatch = line.match(/NAV\s*[:–-]\s*₹?\s*([\d,]+\.?\d*)/i);
+      const currentValMatch = line.match(/(?:Current\s*Value|Value|Market\s*Value?)\s*[:–-]\s*₹?\s*([\d,]+\.?\d*)/i);
+      const costValMatch = line.match(/(?:Cost\s*Value|Cost|Investment\s*Amount?)\s*[:–-]\s*₹?\s*([\d,]+\.?\d*)/i);
+      const folioNumMatch = line.match(/(?:Folio|Folio\s*Number)\s*[:–-]\s*(\S+)/i);
+
+      if (unitMatch) currentFund.units = parseFloat(unitMatch[1].replace(/,/g, ''));
+      if (navMatch) currentFund.nav = parseFloat(navMatch[1].replace(/,/g, ''));
+      if (currentValMatch) currentFund.current_value = parseFloat(currentValMatch[1].replace(/,/g, ''));
+      if (costValMatch) currentFund.cost_value = parseFloat(costValMatch[1].replace(/,/g, ''));
+      if (folioNumMatch && !currentFund.folio_number) currentFund.folio_number = folioNumMatch[1].trim();
+
+      // Category detection
+      if (line.match(/equity|hybrid|debt|liquid|ELSS|index|sector|gold|silver/i) && !currentFund.category) {
+        const catMatch = line.match(/(Equity|Hybrid|Debt|Liquid|ELSS|Index|Sectoral|Gold|Silver)/i);
+        if (catMatch) currentFund.category = catMatch[0];
+      }
+    }
+  }
+  if (currentFund.fund_name) holdings.push(currentFund as HoldingData);
+  if (holdings.length === 0) return null;
+  return {
+    investor_name: investorName || undefined,
+    holdings,
+    total_current_value: holdings.reduce((s, h) => s + (h.current_value || 0), 0),
+    total_cost_value: holdings.reduce((s, h) => s + (h.cost_value || 0), 0),
+  };
+}
+
+/**
+ * Parse older CAMS numbered-list format.
+ * Lines look like:
+ *   1. SBI Bluechip Fund - Direct Plan
+ *   Folio: 12345678
+ *   Units: 1000.000
+ */
+function parseNumberedListFormat(lines: string[]): ParsedPortfolio | null {
+  const holdings: HoldingData[] = [];
+  let currentFund: Partial<HoldingData> = {};
+  let investorName = '';
+
+  const fundNameRegex = /^\d+\.\s+(.+)/;
+
+  for (const line of lines) {
+    // Detect investor name before first folio mention
+    if (!investorName && line.match(/folio/i)) {
+      const beforeFolio = lines.slice(0, lines.indexOf(line)).join(' ');
+      const nameMatch = beforeFolio.match(/[A-Z][a-z]+ [A-Z][a-z]+/);
+      if (nameMatch) investorName = nameMatch[0];
+    }
+
+    // Detect fund name: numbered items or lines with "Direct Plan" / "Regular Plan"
+    const numMatch = line.match(fundNameRegex);
+    const planMatch = line.match(/^(s\.\s+)?[A-Z][a-zA-Z\s\-&,()]+(?:\s*-\s*(?:Direct|Regular)\s*Plan)/);
+    if (numMatch || planMatch) {
+      if (currentFund.fund_name) holdings.push(currentFund as HoldingData);
+      const raw = (numMatch?.[1] ?? line).trim();
+      currentFund = { fund_name: raw, amc: detectAmc(raw) };
+      continue;
+    }
+
+    // Folio number
+    const folioLine = line.match(/folio\s*(?:no|number|#)?[:\s]*(\S+)/i);
+    if (folioLine) {
+      currentFund.folio_number = folioLine[1].trim();
+      continue;
+    }
+
+    if (currentFund.fund_name) {
+      const valMatch = line.match(/₹\s*([\d,]+\.?\d*)/);
+      const unitMatch = line.match(/([\d,]+\.?\d*)\s*(?:units|unit)/i);
+      const navMatch = line.match(/nav\s*[:\s]+₹?\s*([\d,]+\.?\d*)/i);
+      const currentValMatch = line.match(/(?:current|market)\s*value\s*[:\s]+₹?\s*([\d,]+\.?\d*)/i);
+      const costValMatch = line.match(/cost\s*(?:value)?\s*[:\s]+₹?\s*([\d,]+\.?\d*)/i);
+
+      if (unitMatch) currentFund.units = parseFloat(unitMatch[1].replace(/,/g, ''));
+      if (navMatch) currentFund.nav = parseFloat(navMatch[1].replace(/,/g, ''));
+      if (currentValMatch) currentFund.current_value = parseFloat(currentValMatch[1].replace(/,/g, ''));
+      if (costValMatch) currentFund.cost_value = parseFloat(costValMatch[1].replace(/,/g, ''));
+      if (!currentFund.nav && valMatch && !currentFund.current_value) {
+        currentFund.current_value = parseFloat(valMatch[1].replace(/,/g, ''));
+      }
+
+      if (line.match(/equity|hybrid|debt|liquid|ELSS|index|sector|gold|silver/i) && !currentFund.category) {
+        const catMatch = line.match(/(Equity|Hybrid|Debt|Liquid|ELSS|Index|Sectoral|Gold|Silver)/i);
+        if (catMatch) currentFund.category = catMatch[0];
+      }
+    }
+  }
+  if (currentFund.fund_name) holdings.push(currentFund as HoldingData);
+  if (holdings.length === 0) return null;
+  return {
+    investor_name: investorName || undefined,
+    holdings,
+    total_current_value: holdings.reduce((s, h) => s + (h.current_value || 0), 0),
+    total_cost_value: holdings.reduce((s, h) => s + (h.cost_value || 0), 0),
+  };
+}
+
+/**
+ * Format detection helper.
+ * Returns the detected statement type string.
+ */
+function detectFormat(lines: string[]): string {
+  const joined = lines.slice(0, 10).join(' ');
+  if (joined.match(/CAMSCASWS/i)) {
+    const verMatch = joined.match(/V(\d+\.\d+)/);
+    return `CAMSCASWS V${verMatch?.[1] ?? '?'}`;
+  }
+  if (joined.match(/KFin Technologies|KFintech|KFINTECH/i)) return 'KFintech CAS';
+  if (joined.match(/Consolidated Account Summary/i) && joined.match(/CAMS/i)) return 'CAMS CAS';
+  if (joined.match(/CARES/i)) return 'CAMS CARES';
+  return 'Unknown';
+}
+
+/**
+ * Parse CAMSCASWS V3.x tabular format.
+ *
+ * pdf.js extracts the entire page as one line. The holdings table uses columns:
+ *   Folio No. | Market Value (INR) | Scheme Name | Unit Balance | NAV Date | NAV | Registrar | ISIN | Cost Value (INR)
+ *
+ * Each holding row starts with a folio number (digits/digits, e.g. 910213587811/0).
+ * Column values are separated by multiple spaces.
+ */
+function parseCAMSCASWSFormat(lines: string[]): ParsedPortfolio | null {
+  // Rejoin — pdf.js dumps the whole page as one line
+  const text = lines.join(' ');
+
+  // --- Extract investor name ---
+  let investorName = '';
+  const emailNameMatch = text.match(/Email\s*Id\s*:\s*\S+\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)/);
+  if (emailNameMatch) investorName = emailNameMatch[1].trim();
+
+  // --- Locate holdings table ---
+  // Column header: "... Cost Value  (INR) ..."
+  const HEADER_MARKER = 'Cost Value (INR)';
+  const dataStart = text.search(/Cost\s+Value\s*\(INR\)/i);
+  if (dataStart < 0) {
+    console.log("FAIL: table header '" + HEADER_MARKER + "' not found");
+    return null;
+  }
+  const dataSection = text.slice(dataStart);
+
+  console.log("=== CAMSCASWS DATA SECTION ===");
+  console.log(dataSection);
+  console.log("=== END CAMSCASWS DATA SECTION ===");
+
+  // --- Find all folio numbers (table row markers) ---
+  // Folio pattern: long digits / short digits, e.g. 910213587811/0 or 10247591/19
+  // Require at least 4 digits before / to avoid matching dates like 20/10/2019
+  const folioRegex = /(\d{4,})\/(\d{1,2})/g;
+  const folioPositions: { folio: string; start: number }[] = [];
+  let fMatch;
+  while ((fMatch = folioRegex.exec(dataSection)) !== null) {
+    folioPositions.push({
+      folio: fMatch[1] + '/' + fMatch[2],
+      start: fMatch.index + fMatch[0].length,
+    });
+  }
+
+  if (folioPositions.length === 0) {
+    console.log("FAIL: no folio numbers found in data section");
+    return null;
+  }
+  console.log("ROWS DETECTED (folio count): " + folioPositions.length);
+
+  // --- Parse each holding ---
+  const holdings: HoldingData[] = [];
+
+  for (let i = 0; i < folioPositions.length; i++) {
+    const folio = folioPositions[i].folio;
+    const segStart = folioPositions[i].start;
+    const segEnd = i < folioPositions.length - 1
+      ? folioPositions[i + 1].start - folioPositions[i + 1].folio.length - 1
+      : dataSection.length;
+
+    const segment = dataSection.slice(segStart, segEnd).trim();
+    if (!segment) {
+      console.log("Row " + (i + 1) + " (" + folio + "): empty segment, skipped");
+      continue;
+    }
+
+    // --- Field 1: Market Value (first number with 2 decimal places, may include commas) ---
+    const mvMatch = segment.match(/^([\d,]+\.\d{2})\s+/);
+    if (!mvMatch) {
+      console.log("Row " + (i + 1) + " (" + folio + "): market value not found");
+      console.log("  segment start: " + segment.slice(0, 80));
+      continue;
+    }
+    const marketValue = parseFloat(mvMatch[1].replace(/,/g, ''));
+    let rest = segment.slice(mvMatch[0].length);
+
+    // --- Fields 2-3: Unit Balance + NAV Date ---
+    // Unit balance is a number with 3 decimal places, followed by a date like 19-Feb-2026
+    const unitDateMatch = rest.match(/([\d,]+\.\d{3})\s+(\d{2}-[A-Z][a-z]{2}-\d{4})/);
+    if (!unitDateMatch) {
+      console.log("Row " + (i + 1) + " (" + folio + "): unit balance / NAV date not found");
+      console.log("  rest: " + rest.slice(0, 150));
+      continue;
+    }
+    const units = parseFloat(unitDateMatch[1].replace(/,/g, ''));
+    const navDate = unitDateMatch[2];
+    const schemeName = rest.slice(0, unitDateMatch.index).trim();
+    rest = rest.slice(unitDateMatch.index + unitDateMatch[0].length).trim();
+
+    // --- Field 4: NAV (number after the date) ---
+    const navMatch = rest.match(/^([\d,]+\.?\d*)\s+/);
+    if (!navMatch) {
+      console.log("Row " + (i + 1) + " (" + folio + "): NAV not found after date " + navDate);
+      console.log("  rest: " + rest.slice(0, 80));
+      continue;
+    }
+    const nav = parseFloat(navMatch[1].replace(/,/g, ''));
+    rest = rest.slice(navMatch[0].length);
+
+    // --- Field 5: Registrar (word like KFINTECH, CAMS) ---
+    const regMatch = rest.match(/^(\w+)\s+/);
+    if (!regMatch) {
+      console.log("Row " + (i + 1) + " (" + folio + "): registrar not found");
+      continue;
+    }
+    rest = rest.slice(regMatch[0].length);
+
+    // --- Field 6: ISIN (non-whitespace token) ---
+    const isinMatch = rest.match(/^(\S+)\s+/);
+    if (!isinMatch) {
+      console.log("Row " + (i + 1) + " (" + folio + "): ISIN not found");
+      continue;
+    }
+    const isin = isinMatch[1];
+    rest = rest.slice(isinMatch[0].length);
+
+    // --- Field 7: Cost Value (number with 3 decimal places) ---
+    const costMatch = rest.match(/^([\d,]+\.\d{3})/);
+    if (!costMatch) {
+      console.log("Row " + (i + 1) + " (" + folio + "): cost value not found");
+      console.log("  after ISIN: " + rest.slice(0, 80));
+      continue;
+    }
+    const costValue = parseFloat(costMatch[1].replace(/,/g, ''));
+
+    // --- Clean scheme name ---
+    // Remove leading scheme code like "128CFGPG - " or "HLSHFCRG - "
+    const cleanName = schemeName.replace(/^\S+\s+-\s+/, '').trim();
+    const amc = detectAmc(cleanName);
+
+    const holding: HoldingData = {
+      fund_name: cleanName,
+      amc,
+      folio_number: folio,
+      units,
+      nav,
+      current_value: marketValue,
+      cost_value: costValue,
+    };
+    holdings.push(holding);
+
+    console.log("Holding Parsed:", JSON.stringify({
+      schemeName: cleanName,
+      amc,
+      folioNumber: folio,
+      units,
+      nav,
+      marketValue,
+      costValue,
+      isin,
+    }));
+  }
+
+  if (holdings.length === 0) {
+    console.log("FAIL: row parsing produced zero holdings. Trying fallback extraction...");
+    return fallbackCAMSCASWSExtract(text, investorName);
+  }
+
+  const totalValue = holdings.reduce((s, h) => s + (h.current_value || 0), 0);
+  console.log("EXTRACTED HOLDINGS COUNT: " + holdings.length);
+  console.log("TOTAL PORTFOLIO VALUE: ₹" + Math.round(totalValue).toLocaleString());
+  console.log("FIRST 5 HOLDINGS:", JSON.stringify(holdings.slice(0, 5), null, 2));
+
+  return {
+    investor_name: investorName || undefined,
+    holdings,
+    total_current_value: totalValue,
+    total_cost_value: holdings.reduce((s, h) => s + (h.cost_value || 0), 0),
+  };
+}
+
+/**
+ * Fallback extraction for CAMSCASWS when structured table parsing fails.
+ * Scans the text for scheme names ending with "Direct Plan" / "Regular Plan" / "Growth" / "IDCW"
+ * and tries to collect nearby unit/value fields.
+ */
+function fallbackCAMSCASWSExtract(text: string, investorName: string): ParsedPortfolio | null {
+  console.log("FALLBACK: scanning for scheme names...");
+
+  // Find all scheme-name-like segments: text containing " - " and ending with plan/growth keywords
+  const schemeRegex = /([A-Z][A-Za-z0-9\s&-]+(?:Direct Plan|Regular Plan|Growth|IDCW)[^.]*?)(?=\s{2,}|$)/g;
+  const holdings: HoldingData[] = [];
+  let sMatch;
+
+  while ((sMatch = schemeRegex.exec(text)) !== null) {
+    const raw = sMatch[1].trim();
+    console.log("FALLBACK candidate:", raw.slice(0, 120));
+
+    // Try to find folio before this scheme name
+    const beforeText = text.slice(Math.max(0, sMatch.index - 100), sMatch.index);
+    const folioBefore = beforeText.match(/(\d{4,}\/\d{1,2})/);
+    const folio = folioBefore ? folioBefore[1] : undefined;
+
+    // Clean scheme name
+    const schemeName = raw.replace(/^\S+\s+-\s+/, '').trim();
+    if (schemeName.length < 10) continue;
+
+    // Try to extract nearby numbers as units and value
+    const afterText = text.slice(sMatch.index + sMatch[0].length, sMatch.index + sMatch[0].length + 200);
+    const unitMatch = afterText.match(/([\d,]+\.\d{3})/);
+    const valueMatch = afterText.match(/([\d,]+\.\d{2})/);
+
+    const amc = detectAmc(schemeName);
+    const holding: HoldingData = {
+      fund_name: schemeName,
+      amc,
+      folio_number: folio,
+      units: unitMatch ? parseFloat(unitMatch[1].replace(/,/g, '')) : undefined,
+      current_value: valueMatch ? parseFloat(valueMatch[1].replace(/,/g, '')) : undefined,
+    };
+    holdings.push(holding);
+
+    console.log("FALLBACK holding:", JSON.stringify({
+      schemeName, amc, folio,
+      units: holding.units,
+      value: holding.current_value,
+    }));
+  }
+
+  if (holdings.length === 0) return null;
+
+  console.log("FALLBACK EXTRACTED COUNT: " + holdings.length);
+  return {
+    investor_name: investorName || undefined,
+    holdings,
+    total_current_value: holdings.reduce((s, h) => s + (h.current_value || 0), 0),
+    total_cost_value: holdings.reduce((s, h) => s + (h.cost_value || 0), 0),
+  };
+}
+
+/**
+ * Fallback parser: if every other parser fails, search the entire text for
+ * known fund name patterns and extract whatever data is nearby.
+ */
+function parseFallbackFormat(lines: string[]): ParsedPortfolio | null {
+  const holdings: HoldingData[] = [];
+  let currentFund: Partial<HoldingData> = {};
+  let investorName = '';
+
+  // Try to find investor name
+  for (const line of lines) {
+    if (!investorName) {
+      const invMatch = line.match(/Investor\s*[:–-]\s*(.+)/i);
+      if (invMatch) { investorName = invMatch[1].trim(); }
+      const nameLine = line.match(/^([A-Z][a-z]+\s+[A-Z][a-z]+)\s*(?:PAN|Email)/i);
+      if (nameLine && !line.match(/Mutual|Fund|AMC|Scheme|Folio/i)) { investorName = nameLine[1]; }
+    }
+  }
+
+  // Detect fund-like lines
+  const fundKeywords = /Direct Plan|Regular Plan|Growth|IDCW|Dividend/i;
+
+  for (const line of lines) {
+    // Lines containing "Direct Plan" or "Regular Plan" are almost certainly fund names
+    if (fundKeywords.test(line) && line.length > 15 && !line.match(/folio|AMC|unit|nav|value|cost|balance|investor/i)) {
+      // Try to extract the fund name
+      let name = line.replace(/^\d+\s*\.?\s*/, '').trim();
+      // Remove known field prefixes
+      name = name.replace(/^Scheme\s*(?:Name)?\s*[:–-]\s*/i, '').trim();
+      name = name.replace(/^AMC\s*[:–-]\s*/i, '').trim();
+      if (name.length > 15) {
+        if (currentFund.fund_name) holdings.push(currentFund as HoldingData);
+        currentFund = { fund_name: name, amc: detectAmc(name) };
+        continue;
+      }
+    }
+
+    // Folio number
+    const folioMatch = line.match(/(?:Folio|Folio\s*(?:Number|No)?)\s*[:–-]\s*(\S+)/i);
+    if (folioMatch) {
+      currentFund.folio_number = folioMatch[1].trim();
+    }
+
+    if (currentFund.fund_name) {
+      const unitMatch = line.match(/(?:Unit\s*Balance|Units?|Balance)\s*[:–-]\s*([\d,]+\.?\d*)/i);
+      const navMatch = line.match(/NAV\s*[:–-]\s*₹?\s*([\d,]+\.?\d*)/i);
+      const currentValMatch = line.match(/(?:Current\s*Value|Market\s*Value|Value)\s*[:–-]\s*₹?\s*([\d,]+\.?\d*)/i);
+      const costValMatch = line.match(/(?:Cost\s*Value|Cost|Investment\s*Amount)\s*[:–-]\s*₹?\s*([\d,]+\.?\d*)/i);
+
+      if (unitMatch) currentFund.units = parseFloat(unitMatch[1].replace(/,/g, ''));
+      if (navMatch) currentFund.nav = parseFloat(navMatch[1].replace(/,/g, ''));
+      if (currentValMatch) currentFund.current_value = parseFloat(currentValMatch[1].replace(/,/g, ''));
+      if (costValMatch) currentFund.cost_value = parseFloat(costValMatch[1].replace(/,/g, ''));
+      if (!currentFund.nav && !currentFund.current_value) {
+        const valMatch = line.match(/₹\s*([\d,]+\.?\d*)/);
+        if (valMatch) currentFund.current_value = parseFloat(valMatch[1].replace(/,/g, ''));
+      }
+    }
+  }
+  if (currentFund.fund_name) holdings.push(currentFund as HoldingData);
+  if (holdings.length === 0) return null;
+  return {
+    investor_name: investorName || undefined,
+    holdings,
+    total_current_value: holdings.reduce((s, h) => s + (h.current_value || 0), 0),
+    total_cost_value: holdings.reduce((s, h) => s + (h.cost_value || 0), 0),
+  };
+}
 
 function parseCamsText(text: string): ParsedPortfolio | null {
   try {
     const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-    const holdings: HoldingData[] = [];
-    let currentFund: Partial<HoldingData> = {};
-    let investorName = '';
+    const format = detectFormat(lines);
+    console.log("FORMAT DETECTED: " + format);
 
-    for (const line of lines) {
-      if (!investorName && line.match(/folio/i)) {
-        const beforeFolio = lines.slice(0, lines.indexOf(line)).join(' ');
-        const nameMatch = beforeFolio.match(/[A-Z][a-z]+ [A-Z][a-z]+/);
-        if (nameMatch) investorName = nameMatch[0];
-      }
-      if (line.match(/^\d+\.\s+/) || line.match(/^(s\.\s+)?[A-Z][a-zA-Z\s\-&,]+(?:\s*-\s*Direct Plan|\s*-\s*Regular Plan)/)) {
-        if (currentFund.fund_name) {
-          holdings.push(currentFund as HoldingData);
-        }
-        currentFund = { fund_name: line.replace(/^\d+\.\s+/, '').trim(), amc: '' };
-        const amcMap: Record<string, string> = {
-          'axis': 'Axis', 'hdfc': 'HDFC', 'sbi': 'SBI', 'icici': 'ICICI Prudential',
-          'nippon': 'Nippon India', 'kotak': 'Kotak Mahindra', 'uti': 'UTI',
-          ' mirae': 'Mirae Asset', 'aditya birla': 'Aditya Birla Sun Life',
-          'dsp': 'DSP', 'tata': 'Tata', 'quant': 'Quant', 'ppfas': 'PPFAS',
-          'canara': 'Canara Robeco', 'motilal': 'Motilal Oswal', 'franklin': 'Franklin Templeton',
-          'baroda': 'Baroda BNP Paribas', 'invesco': 'Invesco', 'edelweiss': 'Edelweiss',
-          'sundaram': 'Sundaram', 'bandhan': 'Bandhan', 'white oak': 'White Oak Capital',
-          'old bridge': 'Old Bridge', 'navi': 'Navi', 'groww': 'Groww',
-        };
-        const lower = currentFund.fund_name.toLowerCase();
-        for (const [key, val] of Object.entries(amcMap)) {
-          if (lower.includes(key)) { currentFund.amc = val; break; }
-        }
-        continue;
-      }
+    let result: ParsedPortfolio | null = null;
+    let parserUsed = 'none';
 
-      if (currentFund.fund_name) {
-        const valMatch = line.match(/₹\s*([\d,]+\.?\d*)/);
-        const numMatch = line.match(/^([\d,]+\.?\d*)\s*$/);
-        const unitMatch = line.match(/([\d.]+)\s*units/i);
-        const navMatch = line.match(/nav\s*[:\s]+([\d.]+)/i);
-        const currentValMatch = line.match(/current\s*value[:\s]+₹?\s*([\d,]+\.?\d*)/i);
-        const costValMatch = line.match(/cost\s*value[:\s]+₹?\s*([\d,]+\.?\d*)/i);
-
-        if (unitMatch) currentFund.units = parseFloat(unitMatch[1]);
-        if (navMatch) currentFund.nav = parseFloat(navMatch[1]);
-        if (currentValMatch) currentFund.current_value = parseFloat(currentValMatch[1].replace(/,/g, ''));
-        if (costValMatch) currentFund.cost_value = parseFloat(costValMatch[1].replace(/,/g, ''));
-        if (!currentFund.nav && valMatch && !currentFund.current_value) {
-          currentFund.current_value = parseFloat(valMatch[1].replace(/,/g, ''));
-        }
-        if (line.match(/equity|hybrid|debt|liquid|ELSS|index|sector|gold|silver/i) && !currentFund.category) {
-          const catMatch = line.match(/(Equity|Hybrid|Debt|Liquid|ELSS|Index|Sectoral|Gold|Silver)/i);
-          if (catMatch) currentFund.category = catMatch[0];
-        }
+    // Try CAMSCASWS format first (V3.x latest CAMS — tabular layout on single line)
+    if (format.startsWith('CAMSCASWS') || format.startsWith('CAMS CAS')) {
+      parserUsed = 'CAMSCASWS V3.x tabular';
+      result = parseCAMSCASWSFormat(lines);
+      console.log("PARSER BRANCH: " + parserUsed + (result ? ' -> SUCCESS' : ' -> no match'));
+      if (result) {
+        printFinalReport(format, parserUsed, result);
+        return result;
       }
     }
-    if (currentFund.fund_name) holdings.push(currentFund as HoldingData);
 
-    if (holdings.length === 0) return null;
+    // Try modern field-value format (KFintech, generic field-value)
+    parserUsed = 'field-value';
+    result = parseFieldValueFormat(lines);
+    console.log("PARSER BRANCH: " + parserUsed + (result ? ' -> SUCCESS' : ' -> no match'));
+    if (result) {
+      printFinalReport(format, parserUsed, result);
+      return result;
+    }
 
-    return {
-      investor_name: investorName || undefined,
-      holdings,
-      total_current_value: holdings.reduce((s, h) => s + (h.current_value || 0), 0),
-      total_cost_value: holdings.reduce((s, h) => s + (h.cost_value || 0), 0),
-    };
-  } catch {
+    // Try numbered-list format (older CAMS)
+    parserUsed = 'numbered-list';
+    result = parseNumberedListFormat(lines);
+    console.log("PARSER BRANCH: " + parserUsed + (result ? ' -> SUCCESS' : ' -> no match'));
+    if (result) {
+      printFinalReport(format, parserUsed, result);
+      return result;
+    }
+
+    // Never give up — try the fallback
+    parserUsed = 'fallback (scheme-name scan)';
+    result = parseFallbackFormat(lines);
+    console.log("PARSER BRANCH: " + parserUsed + (result ? ' -> SUCCESS' : ' -> no match'));
+    if (result) {
+      printFinalReport(format, parserUsed, result);
+      return result;
+    }
+
+    console.warn("PARSER: all strategies failed. Final report:");
+    console.warn("FORMAT DETECTED: " + format);
+    console.warn("PARSER USED: " + parserUsed);
+    console.warn("ROWS DETECTED: 0");
+    console.warn("HOLDINGS EXTRACTED: 0");
+    console.warn("TOTAL VALUE: ₹0");
+    return null;
+  } catch (err) {
+    console.error("PARSER: exception", err);
     return null;
   }
+}
+
+function printFinalReport(format: string, parserUsed: string, result: ParsedPortfolio): void {
+  const totalValue = result.total_current_value ?? result.holdings.reduce((s, h) => s + (h.current_value || 0), 0);
+  console.log("=== FINAL REPORT ===");
+  console.log("FORMAT DETECTED: " + format);
+  console.log("PARSER USED: " + parserUsed);
+  console.log("ROWS DETECTED: " + result.holdings.length);
+  console.log("HOLDINGS EXTRACTED: " + result.holdings.length);
+  console.log("TOTAL VALUE: ₹" + Math.round(totalValue).toLocaleString());
+  if (result.holdings.length > 0) {
+    console.log("FIRST 5 HOLDINGS:");
+    result.holdings.slice(0, 5).forEach((h, i) => {
+      console.log("  " + (i + 1) + ". " + h.fund_name + " | AMC: " + h.amc + " | Units: " + (h.units ?? 'N/A') + " | Value: ₹" + Math.round(h.current_value ?? 0).toLocaleString());
+    });
+  }
+  console.log("=== END REPORT ===");
 }
 
 export function CAMSUpload({ compact = false, onDataLoaded }: CAMSUploadProps) {
@@ -167,10 +657,17 @@ export function CAMSUpload({ compact = false, onDataLoaded }: CAMSUploadProps) {
     setPortfolio(null);
 
     try {
+      console.log("PDF UPLOADED", { name: file.name, size: file.size, type: file.type });
+      console.log("PDF DECRYPTED - password provided:", !!password);
+
       toast.info('Extracting text from PDF...');
       const textContent = await extractTextFromPDF(file, password);
 
+      console.log("PDF TEXT LENGTH", textContent.length);
+      console.log("PDF PREVIEW", textContent.slice(0, 1000));
+
       if (textContent.length < 50) {
+        console.log("EXTRACTION FAILED - text too short");
         toast.error('Could not extract text from PDF. It may be image-based.');
         setIsProcessing(false);
         return;
@@ -179,14 +676,18 @@ export function CAMSUpload({ compact = false, onDataLoaded }: CAMSUploadProps) {
       toast.info('Analyzing portfolio...');
       const parsed = parseCamsText(textContent);
 
+      console.log("EXTRACTED HOLDINGS", parsed?.holdings ?? []);
+      console.log("PARSED PORTFOLIO", parsed);
+
       if (!parsed || parsed.holdings.length === 0) {
+        console.warn("PARSE RESULT: no holdings found");
         toast.error('No holdings found. Please check if it\'s a valid CAMS statement.');
         setIsProcessing(false);
         return;
       }
 
       setPortfolio(parsed);
-      onDataLoaded?.();
+      onDataLoaded?.(parsed);
       setNeedsPassword(false);
       setPendingFile(null);
       setPdfPassword('');

@@ -16,6 +16,7 @@ import { AllFundsTab } from '@/components/dashboard/AllFundsTab';
 import { AIChat } from '@/components/dashboard/AIChat';
 import { CAMSUpload } from '@/components/dashboard/CAMSUpload';
 import { BuildPortfolio } from '@/components/dashboard/BuildPortfolio';
+import { PortfolioAnalytics } from '@/components/dashboard/PortfolioAnalytics';
 import { AddFundDialog } from '@/components/dashboard/AddFundDialog';
 import { Footer } from '@/components/Footer';
 import { Button } from '@/components/ui/button';
@@ -28,9 +29,6 @@ import { getCachedSectorData } from '@/utils/sectorDataGenerator';
 import { 
   Plus,
   AlertTriangle,
-  TrendingUp,
-  TrendingDown,
-  Minus,
   Loader2,
   Bookmark,
   Wallet,
@@ -63,7 +61,8 @@ const Index = () => {
     addToPortfolio, 
     removeFromPortfolio, 
     portfolioSummary,
-    isLoading: portfolioLoading 
+    isLoading: portfolioLoading,
+    bulkAddCamsHoldings,
   } = usePortfolio();
 
   const [globalSearch, setGlobalSearch] = useState('');
@@ -93,6 +92,14 @@ const Index = () => {
   const [hasCamsData, setHasCamsData] = useState(false);
   const [isAddFundOpen, setIsAddFundOpen] = useState(false);
   const [isPreferencesModalOpen, setIsPreferencesModalOpen] = useState(false);
+
+  // Handle CAMS data loaded - save to portfolio
+  const handleCamsDataLoaded = (parsed?: any) => {
+    setHasCamsData(true);
+    if (parsed?.holdings?.length > 0) {
+      bulkAddCamsHoldings(parsed.holdings);
+    }
+  };
 
   const profileComplete = isProfileComplete(profile);
 
@@ -498,37 +505,7 @@ const Index = () => {
               {/* Portfolio Tab */}
               {activeTab === 'portfolio' && (
                 <div className="animate-fade-in space-y-6">
-                  {/* Portfolio Summary Cards */}
-                  {portfolio.length > 0 && (
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                      <Card className="glass-card">
-                        <CardContent className="pt-6">
-                          <p className="text-sm text-muted-foreground mb-1">Total Invested</p>
-                          <p className="text-2xl font-bold text-foreground">
-                            ₹{portfolioSummary.totalInvested.toLocaleString()}
-                          </p>
-                        </CardContent>
-                      </Card>
-                      <Card className="glass-card">
-                        <CardContent className="pt-6">
-                          <p className="text-sm text-muted-foreground mb-1">Monthly SIP</p>
-                          <p className="text-2xl font-bold text-foreground">
-                            ₹{portfolioSummary.totalSIP.toLocaleString()}
-                          </p>
-                        </CardContent>
-                      </Card>
-                      <Card className="glass-card">
-                        <CardContent className="pt-6">
-                          <p className="text-sm text-muted-foreground mb-1">Funds in Portfolio</p>
-                          <p className="text-2xl font-bold text-foreground">
-                            {portfolioSummary.fundCount}
-                          </p>
-                        </CardContent>
-                      </Card>
-                    </div>
-                  )}
-
-                  {/* Unified action card: Upload CAMS / Add manually */}
+                  {/* Empty state: prompt to upload or add */}
                   {portfolio.length === 0 && !hasCamsData && (
                     <Card className="glass-card">
                       <CardContent className="py-8 text-center">
@@ -539,7 +516,7 @@ const Index = () => {
                           Import your full portfolio from a CAMS PDF, or add individual funds one at a time.
                         </p>
                         <div className="flex flex-col sm:flex-row gap-3 justify-center">
-                          <CAMSUpload compact onDataLoaded={() => setHasCamsData(true)} />
+                          <CAMSUpload compact onDataLoaded={handleCamsDataLoaded} />
                           <Button onClick={() => setIsAddFundOpen(true)}>
                             <Plus className="h-4 w-4 mr-1" />
                             Add Mutual Fund
@@ -549,18 +526,13 @@ const Index = () => {
                     </Card>
                   )}
 
-                  {/* CAMS results (only after upload) */}
-                  {hasCamsData && (
-                    <CAMSUpload compact={false} onDataLoaded={() => setHasCamsData(true)} />
-                  )}
-
-                  {/* Investments list (only when there are holdings) */}
-                  {portfolio.length > 0 && (
+                  {/* Analytics dashboard when portfolio has data */}
+                  {(portfolio.length > 0 || hasCamsData) && (
                     <>
                       <div className="flex justify-between items-center">
-                        <h3 className="text-lg font-semibold">Your Investments</h3>
+                        <h3 className="text-lg font-semibold">Portfolio Analytics</h3>
                         <div className="flex gap-2">
-                          <CAMSUpload compact onDataLoaded={() => setHasCamsData(true)} />
+                          <CAMSUpload compact onDataLoaded={handleCamsDataLoaded} />
                           <Button size="sm" onClick={() => setIsAddFundOpen(true)}>
                             <Plus className="h-3.5 w-3.5 mr-1" />
                             Add Fund
@@ -571,79 +543,14 @@ const Index = () => {
                       {portfolioLoading ? (
                         <DashboardLoadingState />
                       ) : (
-                        <div className="space-y-4">
-                          {portfolio.map(item => {
-                            const insight = getPortfolioInsight(item);
-                            return (
-                              <Card
-                                key={item.id}
-                                className="glass-card cursor-pointer hover:border-white/25 transition-colors"
-                                onClick={() => handlePortfolioItemClick(item)}
-                              >
-                                <CardContent className="py-4">
-                                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                                    <div className="flex-1">
-                                      <div className="flex items-center gap-2 mb-1">
-                                        <h4 className="font-semibold">{item.fund_name}</h4>
-                                        <Badge variant="outline" className="text-xs">
-                                          {item.fund_category}
-                                        </Badge>
-                                      </div>
-                                      <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
-                                        {item.invested_amount && (
-                                          <span>Invested: ₹{item.invested_amount.toLocaleString()}</span>
-                                        )}
-                                        {item.is_sip && item.sip_amount && (
-                                          <span>SIP: ₹{item.sip_amount.toLocaleString()}/mo</span>
-                                        )}
-                                      </div>
-                                    </div>
-
-                                    <div className="flex items-center gap-3">
-                                      <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium ${
-                                        insight.type === 'continue'
-                                          ? 'bg-success/20 text-success'
-                                          : insight.type === 'reduce'
-                                            ? 'bg-destructive/20 text-destructive'
-                                            : 'bg-warning/20 text-warning'
-                                      }`}>
-                                        {insight.type === 'continue' && <TrendingUp className="h-3 w-3" />}
-                                        {insight.type === 'review' && <Minus className="h-3 w-3" />}
-                                        {insight.type === 'reduce' && <TrendingDown className="h-3 w-3" />}
-                                        {insight.message}
-                                      </div>
-                                      <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          removeFromPortfolio(item.id);
-                                        }}
-                                        className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                                      >
-                                        Remove
-                                      </Button>
-                                    </div>
-                                  </div>
-                                </CardContent>
-                              </Card>
-                            );
-                          })}
-                        </div>
+                        <PortfolioAnalytics
+                          portfolio={portfolio}
+                          funds={funds}
+                          userProfile={profile}
+                        />
                       )}
                     </>
                   )}
-
-                  <Card className="bg-warning/10 border-warning/30">
-                    <CardContent className="py-4 flex items-start gap-3">
-                      <AlertTriangle className="h-5 w-5 text-warning flex-shrink-0 mt-0.5" />
-                      <p className="text-sm text-muted-foreground">
-                        <strong className="text-warning">Disclaimer:</strong> Educational insights only. Not investment advice. 
-                        Past performance does not guarantee future results. Mutual fund investments are subject to market risks. 
-                        Please consult a qualified financial advisor before making investment decisions.
-                      </p>
-                    </CardContent>
-                  </Card>
                 </div>
               )}
 
